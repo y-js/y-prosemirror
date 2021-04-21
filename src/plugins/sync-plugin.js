@@ -39,6 +39,7 @@ export const isVisible = (item, snapshot) => snapshot === undefined ? !item.dele
  * @property {Array<ColorDef>} [YSyncOpts.colors]
  * @property {Map<string,ColorDef>} [YSyncOpts.colorMapping]
  * @property {Y.PermanentUserData|null} [YSyncOpts.permanentUserData]
+ * @property {function} [getFallbackNode]
  */
 
 /**
@@ -73,7 +74,7 @@ const getUserColor = (colorMapping, colors, user) => {
  * @param {YSyncOpts} opts
  * @return {any} Returns a prosemirror plugin that binds to this type
  */
-export const ySyncPlugin = (yXmlFragment, { colors = defaultColors, colorMapping = new Map(), permanentUserData = null } = {}) => {
+export const ySyncPlugin = (yXmlFragment, { colors = defaultColors, colorMapping = new Map(), permanentUserData = null, getFallbackNode } = {}) => {
   let changedInitialContent = false
   const plugin = new Plugin({
     props: {
@@ -128,7 +129,7 @@ export const ySyncPlugin = (yXmlFragment, { colors = defaultColors, colorMapping
       }
     },
     view: view => {
-      const binding = new ProsemirrorBinding(yXmlFragment, view)
+      const binding = new ProsemirrorBinding(yXmlFragment, view, getFallbackNode)
       // Make sure this is called in a separate context
       setTimeout(() => {
         binding._forceRerender()
@@ -182,8 +183,9 @@ export class ProsemirrorBinding {
   /**
    * @param {Y.XmlFragment} yXmlFragment The bind source
    * @param {any} prosemirrorView The target binding
+   * @param {function} getFallbackNode
    */
-  constructor (yXmlFragment, prosemirrorView) {
+  constructor (yXmlFragment, prosemirrorView, getFallbackNode) {
     this.type = yXmlFragment
     this.prosemirrorView = prosemirrorView
     this.mux = createMutex()
@@ -215,6 +217,20 @@ export class ProsemirrorBinding {
     yXmlFragment.observeDeep(this._observeFunction)
 
     this._domSelectionInView = null
+
+    if (typeof getFallbackNode === 'function') {
+      const fallbackNode = getFallbackNode()
+      let fallbackNodeName
+      try {
+        fallbackNodeName = fallbackNode.type.name
+      } catch (e) {
+        throw new Error('you must return a prosemirror node from getFallbackNode function')
+      }
+      this.getFallbackNode = getFallbackNode
+      this.isFallbackNode = function (PNode) {
+        return fallbackNodeName === PNode.type.name
+      }
+    }
   }
 
   _isLocalCursorInView () {
@@ -265,7 +281,7 @@ export class ProsemirrorBinding {
   unrenderSnapshot () {
     this.mapping = new Map()
     this.mux(() => {
-      const fragmentContent = this.type.toArray().map(t => createNodeFromYElement(/** @type {Y.XmlElement} */ (t), this.prosemirrorView.state.schema, this.mapping)).filter(n => n !== null)
+      const fragmentContent = this.type.toArray().map(t => createNodeFromYElement(/** @type {Y.XmlElement} */ (t), this.prosemirrorView.state.schema, this.mapping, undefined, undefined, undefined, undefined, this.getFallbackNode)).filter(n => n !== null)
       // @ts-ignore
       const tr = this.prosemirrorView.state.tr.replace(0, this.prosemirrorView.state.doc.content.size, new PModel.Slice(new PModel.Fragment(fragmentContent), 0, 0))
       tr.setMeta(ySyncPluginKey, { snapshot: null, prevSnapshot: null })
@@ -276,7 +292,7 @@ export class ProsemirrorBinding {
   _forceRerender () {
     this.mapping = new Map()
     this.mux(() => {
-      const fragmentContent = this.type.toArray().map(t => createNodeFromYElement(/** @type {Y.XmlElement} */ (t), this.prosemirrorView.state.schema, this.mapping)).filter(n => n !== null)
+      const fragmentContent = this.type.toArray().map(t => createNodeFromYElement(/** @type {Y.XmlElement} */ (t), this.prosemirrorView.state.schema, this.mapping, undefined, undefined, undefined, undefined, this.getFallbackNode)).filter(n => n !== null)
       // @ts-ignore
       const tr = this.prosemirrorView.state.tr.replace(0, this.prosemirrorView.state.doc.content.size, new PModel.Slice(new PModel.Fragment(fragmentContent), 0, 0))
       this.prosemirrorView.dispatch(tr)
@@ -315,7 +331,7 @@ export class ProsemirrorBinding {
         // Create document fragment and render
         const fragmentContent = Y.typeListToArraySnapshot(this.type, new Y.Snapshot(prevSnapshot.ds, snapshot.sv)).map(t => {
           if (!t._item.deleted || isVisible(t._item, snapshot) || isVisible(t._item, prevSnapshot)) {
-            return createNodeFromYElement(t, this.prosemirrorView.state.schema, new Map(), snapshot, prevSnapshot, computeYChange)
+            return createNodeFromYElement(t, this.prosemirrorView.state.schema, new Map(), snapshot, prevSnapshot, computeYChange, undefined, this.getFallbackNode)
           } else {
             // No need to render elements that are not visible by either snapshot.
             // If a client adds and deletes content in the same snapshot the element is not visible by either snapshot.
@@ -341,15 +357,22 @@ export class ProsemirrorBinding {
       return
     }
     this.mux(() => {
+      const oldNodeMapping = new Map()
       /**
        * @param {any} _
        * @param {Y.AbstractType} type
        */
-      const delType = (_, type) => this.mapping.delete(type)
+      const delType = (_, type) => {
+        const deleteNode = this.mapping.get(type)
+        if (deleteNode !== undefined) {
+          oldNodeMapping.set(type, deleteNode)
+        }
+        return this.mapping.delete(type)
+      }
       Y.iterateDeletedStructs(transaction, transaction.deleteSet, struct => struct.constructor === Y.Item && this.mapping.delete(/** @type {Y.ContentType} */ (/** @type {Y.Item} */ (struct).content).type))
       transaction.changed.forEach(delType)
       transaction.changedParentTypes.forEach(delType)
-      const fragmentContent = this.type.toArray().map(t => createNodeIfNotExists(/** @type {Y.XmlElement | Y.XmlHook} */ (t), this.prosemirrorView.state.schema, this.mapping)).filter(n => n !== null)
+      const fragmentContent = this.type.toArray().map(t => createNodeIfNotExists(/** @type {Y.XmlElement | Y.XmlHook} */ (t), this.prosemirrorView.state.schema, this.mapping, undefined, undefined, undefined, oldNodeMapping, this.getFallbackNode)).filter(n => n !== null)
       // @ts-ignore
       let tr = this.prosemirrorView.state.tr.replace(0, this.prosemirrorView.state.doc.content.size, new PModel.Slice(new PModel.Fragment(fragmentContent), 0, 0))
       restoreRelativeSelection(tr, this.beforeTransactionSelection, this)
@@ -364,7 +387,7 @@ export class ProsemirrorBinding {
   _prosemirrorChanged (doc) {
     this.mux(() => {
       this.doc.transact(() => {
-        updateYFragment(this.doc, this.type, doc, this.mapping)
+        updateYFragment(this.doc, this.type, doc, this.mapping, this.isFallbackNode)
         this.beforeTransactionSelection = getRelativeSelection(this, this.prosemirrorView.state)
       }, ySyncPluginKey)
     })
@@ -377,6 +400,22 @@ export class ProsemirrorBinding {
   }
 }
 
+const isPrivateAttr = (pSpec, key) => {
+  return key in pSpec.attrs && pSpec.attrs[key].yPrivate === true
+}
+
+const findPrivateAttrs = node => {
+  const privateAttrs = {}
+  if (node !== undefined) {
+    for (const i in node.attrs) {
+      if (isPrivateAttr(node.type.spec, i)) {
+        privateAttrs[i] = node.attrs[i]
+      }
+    }
+  }
+  return privateAttrs
+}
+
 /**
  * @private
  * @param {Y.XmlElement | Y.XmlHook} el
@@ -385,13 +424,15 @@ export class ProsemirrorBinding {
  * @param {Y.Snapshot} [snapshot]
  * @param {Y.Snapshot} [prevSnapshot]
  * @param {function('removed' | 'added', Y.ID):any} [computeYChange]
+ * @param {ProsemirrorMapping} [oldNodeMapping]
+ * @param {function} [getFallbackNode]
  * @return {PModel.Node | null}
  */
-const createNodeIfNotExists = (el, schema, mapping, snapshot, prevSnapshot, computeYChange) => {
+const createNodeIfNotExists = (el, schema, mapping, snapshot, prevSnapshot, computeYChange, oldNodeMapping, getFallbackNode) => {
   const node = /** @type {PModel.Node} */ (mapping.get(el))
   if (node === undefined) {
     if (el instanceof Y.XmlElement) {
-      return createNodeFromYElement(el, schema, mapping, snapshot, prevSnapshot, computeYChange)
+      return createNodeFromYElement(el, schema, mapping, snapshot, prevSnapshot, computeYChange, oldNodeMapping, getFallbackNode)
     } else {
       throw error.methodUnimplemented() // we are currently not handling hooks
     }
@@ -407,13 +448,15 @@ const createNodeIfNotExists = (el, schema, mapping, snapshot, prevSnapshot, comp
  * @param {Y.Snapshot} [snapshot]
  * @param {Y.Snapshot} [prevSnapshot]
  * @param {function('removed' | 'added', Y.ID):any} [computeYChange]
+ * @param {ProsemirrorMapping} [oldNodeMapping]
+ * @param {function} [getFallbackNode]
  * @return {PModel.Node | null} Returns node if node could be created. Otherwise it deletes the yjs type and returns null
  */
-const createNodeFromYElement = (el, schema, mapping, snapshot, prevSnapshot, computeYChange) => {
+const createNodeFromYElement = (el, schema, mapping, snapshot, prevSnapshot, computeYChange, oldNodeMapping, getFallbackNode) => {
   const children = []
   const createChildren = type => {
     if (type.constructor === Y.XmlElement) {
-      const n = createNodeIfNotExists(type, schema, mapping, snapshot, prevSnapshot, computeYChange)
+      const n = createNodeIfNotExists(type, schema, mapping, snapshot, prevSnapshot, computeYChange, oldNodeMapping, getFallbackNode)
       if (n !== null) {
         children.push(n)
       }
@@ -428,10 +471,13 @@ const createNodeFromYElement = (el, schema, mapping, snapshot, prevSnapshot, com
       }
     }
   }
-  if (snapshot === undefined || prevSnapshot === undefined) {
-    el.toArray().forEach(createChildren)
-  } else {
-    Y.typeListToArraySnapshot(el, new Y.Snapshot(prevSnapshot.ds, snapshot.sv)).forEach(createChildren)
+  let isKnownNode = !!schema.nodes[el.nodeName]
+  if (isKnownNode) {
+    if (snapshot === undefined || prevSnapshot === undefined) {
+      el.toArray().forEach(createChildren)
+    } else {
+      Y.typeListToArraySnapshot(el, new Y.Snapshot(prevSnapshot.ds, snapshot.sv)).forEach(createChildren)
+    }
   }
   try {
     const attrs = el.getAttributes(snapshot)
@@ -442,7 +488,25 @@ const createNodeFromYElement = (el, schema, mapping, snapshot, prevSnapshot, com
         attrs.ychange = computeYChange ? computeYChange('added', /** @type {Y.Item} */ (el._item).id) : { type: 'added' }
       }
     }
-    const node = schema.node(el.nodeName, attrs, children)
+
+    if (oldNodeMapping) {
+      const oldNode = oldNodeMapping.get(el)
+      const privateAttrs = findPrivateAttrs(oldNode)
+      for (const i in privateAttrs) {
+        attrs[i] = privateAttrs[i]
+      }
+    }
+
+    let node
+    if (typeof getFallbackNode === 'function') {
+      if (isKnownNode) {
+        node = schema.node(el.nodeName, attrs, children)
+      } else {
+        node = getFallbackNode()
+      }
+    } else {
+      node = schema.node(el.nodeName, attrs, children)
+    }
     mapping.set(el, node)
     return node
   } catch (e) {
@@ -516,7 +580,7 @@ const createTypeFromElementNode = (node, mapping) => {
   const type = new Y.XmlElement(node.type.name)
   for (const key in node.attrs) {
     const val = node.attrs[key]
-    if (val !== null && key !== 'ychange') {
+    if (val !== null && key !== 'ychange' && !isPrivateAttr(node.type.spec, key)) {
       type.setAttribute(key, val)
     }
   }
@@ -694,8 +758,9 @@ const marksToAttributes = marks => {
  * @param {Y.XmlFragment} yDomFragment
  * @param {any} pNode
  * @param {ProsemirrorMapping} mapping
+ * @param {function} [isFallbackNode]
  */
-export const updateYFragment = (y, yDomFragment, pNode, mapping) => {
+export const updateYFragment = (y, yDomFragment, pNode, mapping, isFallbackNode) => {
   if (yDomFragment instanceof Y.XmlElement && yDomFragment.nodeName !== pNode.type.name) {
     throw new Error('node name mismatch!')
   }
@@ -706,7 +771,7 @@ export const updateYFragment = (y, yDomFragment, pNode, mapping) => {
     const pAttrs = pNode.attrs
     for (const key in pAttrs) {
       if (pAttrs[key] !== null) {
-        if (yDomAttrs[key] !== pAttrs[key] && key !== 'ychange') {
+        if (yDomAttrs[key] !== pAttrs[key] && key !== 'ychange' && !isPrivateAttr(pNode.type.spec, key)) {
           yDomFragment.setAttribute(key, pAttrs[key])
         }
       } else {
@@ -715,7 +780,7 @@ export const updateYFragment = (y, yDomFragment, pNode, mapping) => {
     }
     // remove all keys that are no longer in pAttrs
     for (const key in yDomAttrs) {
-      if (pAttrs[key] === undefined) {
+      if (key in pAttrs && pAttrs[key] === undefined) {
         yDomFragment.removeAttribute(key)
       }
     }
@@ -761,7 +826,13 @@ export const updateYFragment = (y, yDomFragment, pNode, mapping) => {
       const leftP = pChildren[left]
       const rightY = yChildren[yChildCnt - right - 1]
       const rightP = pChildren[pChildCnt - right - 1]
-      if (leftY instanceof Y.XmlText && leftP instanceof Array) {
+      if (!(leftP instanceof Array) && isFallbackNode && isFallbackNode(leftP)) {
+        if (mapping.get(leftY) !== leftP) {
+          yDomFragment.delete(left, 1)
+          yDomFragment.insert(left, /** @type Array{Y.XmlFragment} */ [leftY])
+        }
+        left += 1
+      } else if (leftY instanceof Y.XmlText && leftP instanceof Array) {
         if (!equalYTextPText(leftY, leftP)) {
           updateYText(leftY, leftP, mapping)
         }
@@ -784,10 +855,10 @@ export const updateYFragment = (y, yDomFragment, pNode, mapping) => {
           }
         }
         if (updateLeft) {
-          updateYFragment(y, /** @type {Y.XmlFragment} */ (leftY), /** @type {PModel.Node} */ (leftP), mapping)
+          updateYFragment(y, /** @type {Y.XmlFragment} */ (leftY), /** @type {PModel.Node} */ (leftP), mapping, isFallbackNode)
           left += 1
         } else if (updateRight) {
-          updateYFragment(y, /** @type {Y.XmlFragment} */ (rightY), /** @type {PModel.Node} */ (rightP), mapping)
+          updateYFragment(y, /** @type {Y.XmlFragment} */ (rightY), /** @type {PModel.Node} */ (rightP), mapping, isFallbackNode)
           right += 1
         } else {
           yDomFragment.delete(left, 1)
