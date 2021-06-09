@@ -29,6 +29,36 @@ export const testDocTransformation = tc => {
 /**
  * @param {t.TestCase} tc
  */
+export const testDuplicateMarks = tc => {
+  const ydoc = new Y.Doc()
+  const type = ydoc.getXmlFragment('prosemirror')
+  const view = createNewComplexProsemirrorView(ydoc)
+  t.assert(type.toString() === '', 'should only sync after first change')
+
+  view.dispatch(
+    view.state.tr.setNodeMarkup(0, undefined, {
+      checked: true
+    })
+  )
+
+  const marks = [complexSchema.mark('comment', { id: 0 }), complexSchema.mark('comment', { id: 1 })]
+  view.dispatch(view.state.tr.insert(view.state.doc.content.size - 1, /** @type {any} */ complexSchema.text('hello world', marks)))
+  const stateJSON = view.state.doc.toJSON()
+
+  // test if transforming back and forth from Yjs doc works
+  const backandforth = yDocToProsemirrorJSON(prosemirrorJSONToYDoc(/** @type {any} */ (complexSchema), stateJSON))
+
+  // TODO: I think the duplicate marks work, but I think this fails because
+  // there is a yChange on stateJSON.content[1] (and not on backandforth)
+  t.compare(stateJSON, backandforth)
+
+  // TODO: create a toString test, this currently fails because YXmlText breaks
+  // t.compareStrings(type.toString(), '<custom checked="true"></custom><paragraph></paragraph>')
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
 export const testEmptyNotSync = tc => {
   const ydoc = new Y.Doc()
   const type = ydoc.getXmlFragment('prosemirror')

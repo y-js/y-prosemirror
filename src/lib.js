@@ -267,18 +267,35 @@ export function yDocToProsemirrorJSON (
         }
 
         if (d.attributes) {
-          text.marks = Object.keys(d.attributes).map((type) => {
-            const attrs = d.attributes[type]
-            const mark = {
-              type
-            }
+          let marks = []
+          text.marks = Object.keys(d.attributes).forEach((type) => {
+            let attrs = d.attributes[type]
+            if (Array.isArray(attrs)) {
+              // multiple marks of same type
+              attrs.forEach(singleAttrs => {
+                const mark = {
+                  type
+                }
 
-            if (Object.keys(attrs)) {
-              mark.attrs = attrs
-            }
+                if (Object.keys(singleAttrs)) {
+                  mark.attrs = singleAttrs
+                }
 
-            return mark
+                marks.push(mark)
+              })
+            } else {
+              const mark = {
+                type
+              }
+
+              if (Object.keys(attrs)) {
+                mark.attrs = attrs
+              }
+
+              marks.push(mark)
+            }
           })
+          text.marks = marks
         }
         return text
       })

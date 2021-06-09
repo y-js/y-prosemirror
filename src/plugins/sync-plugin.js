@@ -473,7 +473,15 @@ const createTextNodesFromYText = (text, schema, mapping, snapshot, prevSnapshot,
       const delta = deltas[i]
       const marks = []
       for (const markName in delta.attributes) {
-        marks.push(schema.mark(markName, delta.attributes[markName]))
+        if (Array.isArray(delta.attributes[markName])) {
+          // multiple marks of same type
+          delta.attributes[markName].forEach(attrs => {
+            marks.push(schema.mark(markName, attrs))
+          })
+        } else {
+          // single mark
+          marks.push(schema.mark(markName, delta.attributes[markName]))
+        }
       }
       nodes.push(schema.text(delta.insert, marks))
     }
@@ -545,6 +553,14 @@ const equalAttrs = (pattrs, yattrs) => {
   return eq
 }
 
+const containsEqualMark = (pattrs, yattrs) => {
+  if (Array.isArray(yattrs)) {
+    return !!yattrs.find(el => equalAttrs(pattrs, el))
+  } else {
+    return equalAttrs(pattrs, yattrs)
+  }
+}
+
 /**
  * @typedef {Array<Array<PModel.Node>|PModel.Node>} NormalizedPNodeContent
  */
@@ -572,13 +588,25 @@ const normalizePNodeContent = pnode => {
   return res
 }
 
+const countYTextMarks = (yattrs) => {
+  let count = 0
+  object.forEach(yattrs, (val) => {
+    if (Array.isArray(val)) {
+      count += val.length
+    } else {
+      count++
+    }
+  })
+  return count
+}
+
 /**
  * @param {Y.XmlText} ytext
  * @param {Array<any>} ptexts
  */
 const equalYTextPText = (ytext, ptexts) => {
   const delta = ytext.toDelta()
-  return delta.length === ptexts.length && delta.every((d, i) => d.insert === /** @type {any} */ (ptexts[i]).text && object.keys(d.attributes || {}).length === ptexts[i].marks.length && ptexts[i].marks.every(mark => equalAttrs(d.attributes[mark.type.name] || {}, mark.attrs)))
+  return delta.length === ptexts.length && delta.every((d, i) => d.insert === /** @type {any} */ (ptexts[i]).text && countYTextMarks(d.attributes || {}) === ptexts[i].marks.length && ptexts[i].marks.every(mark => containsEqualMark(d.attributes[mark.type.name] || {}, mark.attrs)))
 }
 
 /**
@@ -682,7 +710,16 @@ const marksToAttributes = marks => {
   const pattrs = {}
   marks.forEach(mark => {
     if (mark.type.name !== 'ychange') {
-      pattrs[mark.type.name] = mark.attrs
+      if (pattrs[mark.type.name] && Array.isArray(pattrs[mark.type.name])) {
+        // already has multiple marks of same type
+        pattrs[mark.type.name].push(mark.attrs)
+      } else if (pattrs[mark.type.name]) {
+        // already has mark of same type, change to array
+        pattrs[mark.type.name] = [pattrs[mark.type.name], mark.attrs]
+      } else {
+        // first mark of this type
+        pattrs[mark.type.name] = mark.attrs
+      }
     }
   })
   return pattrs
