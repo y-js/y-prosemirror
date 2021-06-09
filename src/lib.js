@@ -185,6 +185,17 @@ export const relativePositionToAbsolutePosition = (y, documentType, relPos, mapp
 }
 
 /**
+ * Utility method to update a Y.XMLFragment from a Prosemirror Doc Node.
+ * *
+ * @param {Y.XMLFragment} type
+ * @param {Node} doc
+ */
+ export function updateYXmlFragmentFromProsemirror (type, doc) {
+  if (!type.doc) throw new Error('type must be attached to a Y.Doc!')
+  updateYFragment(type.doc, type, doc, new Map())
+}
+
+/**
  * Utility method to convert a Prosemirror Doc Node into a Y.Doc.
  *
  * This can be used when importing existing content to Y.Doc for the first time,
@@ -198,11 +209,7 @@ export const relativePositionToAbsolutePosition = (y, documentType, relPos, mapp
 export function prosemirrorToYDoc (doc, xmlFragment = 'prosemirror') {
   const ydoc = new Y.Doc()
   const type = ydoc.get(xmlFragment, Y.XmlFragment)
-  if (!type.doc) {
-    return ydoc
-  }
-
-  updateYFragment(type.doc, type, doc, new Map())
+  updateYXmlFragmentFromProsemirror(type, doc)
   return type.doc
 }
 
@@ -242,11 +249,22 @@ export function yDocToProsemirror (schema, ydoc) {
  * @param {string} xmlFragment
  * @return {Record<string, any>}
  */
-export function yDocToProsemirrorJSON (
+ export function yDocToProsemirrorJSON (
   ydoc,
   xmlFragment = 'prosemirror'
 ) {
-  const items = ydoc.getXmlFragment(xmlFragment).toArray()
+  const yXmlFragment = ydoc.getXmlFragment(xmlFragment)
+  return yXmlFragmentToProsemirrorJSON(yXmlFragment)
+}
+
+/**
+ * Utility method to convert a Y.Doc to Prosemirror compatible JSON.
+ *
+ * @param {Y.XMLFragment} yXmlFragment
+ * @return {Record<string, any>}
+ */
+export function yXmlFragmentToProsemirrorJSON (yXmlFragment) {
+  const items = yXmlFragment.toArray()
 
   function serialize (item) {
     /**
