@@ -3,6 +3,7 @@ import * as Y from 'yjs'
 import { Decoration, DecorationSet } from 'prosemirror-view' // eslint-disable-line
 import { Plugin } from 'prosemirror-state' // eslint-disable-line
 import { Awareness } from 'y-protocols/awareness.js' // eslint-disable-line
+import color from 'tinycolor2'
 import { absolutePositionToRelativePosition, relativePositionToAbsolutePosition, setMeta } from '../lib.js'
 import { yCursorPluginKey, ySyncPluginKey } from './keys.js'
 
@@ -47,6 +48,12 @@ export const createDecorations = (state, awareness, createCursor) => {
       if (user.color == null) {
         user.color = '#ffa500'
       }
+      if (user.selectionAlpha == null) {
+        user.selectionAlpha = 0.44
+      }
+      if (user.selectionColor == null) {
+        user.selectionColor = color(user.color).setAlpha(user.selectionAlpha)
+      }
       if (user.name == null) {
         user.name = `User: ${clientId}`
       }
@@ -59,7 +66,11 @@ export const createDecorations = (state, awareness, createCursor) => {
         decorations.push(Decoration.widget(head, () => createCursor(user), { key: clientId + '', side: 10 }))
         const from = math.min(anchor, head)
         const to = math.max(anchor, head)
-        decorations.push(Decoration.inline(from, to, { style: `background-color: ${user.color}70` }, { inclusiveEnd: true, inclusiveStart: false }))
+        const attrs = {
+          style: `background-color: ${user.selectionColor}`,
+          class: `ProseMirror-yjs-selection`
+        }
+        decorations.push(Decoration.inline(from, to, attrs, { inclusiveEnd: true, inclusiveStart: false }))
       }
     }
   })
