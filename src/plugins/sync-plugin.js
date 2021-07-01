@@ -232,7 +232,7 @@ export class ProsemirrorBinding {
   _isDomSelectionInView () {
     const selection = this.prosemirrorView._root.getSelection()
 
-    const range = this.prosemirrorView._root.createRange()
+    const range = new Range()
     range.setStart(selection.anchorNode, selection.anchorOffset)
     range.setEnd(selection.focusNode, selection.focusOffset)
 
