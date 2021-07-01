@@ -37,6 +37,9 @@ export const createDecorations = (state, awareness, createCursor) => {
   if (ystate.snapshot != null || ystate.prevSnapshot != null || ystate.binding === null) {
     // do not render cursors while snapshot is active
     return DecorationSet.create(state.doc, [])
+  } else if (ystate.binding.mapping.size === 0) {
+    // do not render until binding mappings are present
+    return DecorationSet.create(state.doc, [])
   }
   awareness.getStates().forEach((aw, clientId) => {
     if (clientId === y.clientID) {

@@ -65,6 +65,58 @@ const getUserColor = (colorMapping, colors, user) => {
   return /** @type {ColorDef} */ (colorMapping.get(user))
 }
 
+class YSyncPluginState {
+  constructor (yXmlFragment, { colors, colorMapping, permanentUserData }) {
+    this.type = yXmlFragment
+    this.doc = yXmlFragment.doc
+    this.binding = null
+    this.snapshot = null
+    this.prevSnapshot = null
+    this.isChangeOrigin = false
+    this.colors = colors
+    this.colorMapping = colorMapping
+    this.permanentUserData = permanentUserData
+  }
+
+  init (view) {
+    if (this.binding) {
+      return this
+    }
+    this.binding = new ProsemirrorBinding(this.type, view)
+    return this
+  }
+
+  destroy () {
+    if (this.binding) {
+      this.binding.destroy()
+    }
+    this.binding = null
+  }
+
+  apply (tr, pluginState) {
+    const change = tr.getMeta(ySyncPluginKey)
+    this.isChangeOrigin = change !== undefined && !!change.isChangeOrigin
+    if (this.binding !== null) {
+      if (change !== undefined && (change.snapshot != null || change.prevSnapshot != null)) {
+        // snapshot changed, rerender next
+        setTimeout(() => {
+          if (change.restore == null) {
+            this.binding._renderSnapshot(change.snapshot, change.prevSnapshot, this)
+          } else {
+            this.binding._renderSnapshot(change.snapshot, change.snapshot, this)
+            // reset to current prosemirror state
+            this.restore = undefined
+            this.snapshot = undefined
+            this.prevSnapshot = undefined
+            this.binding._prosemirrorChanged(this.binding.prosemirrorView.state.doc)
+          }
+        }, 0)
+      }
+    }
+    return this
+  }
+}
+
 /**
  * This plugin listens to changes in prosemirror view and keeps yXmlState and view in sync.
  *
@@ -75,7 +127,8 @@ const getUserColor = (colorMapping, colors, user) => {
  */
 export const ySyncPlugin = (yXmlFragment, { colors = defaultColors, colorMapping = new Map(), permanentUserData = null } = {}) => {
   let changedInitialContent = false
-  const plugin = new Plugin({
+  const pluginState = new YSyncPluginState(yXmlFragment, { colors, colorMapping, permanentUserData })
+  return new Plugin({
     props: {
       editable: (state) => {
         const syncState = ySyncPluginKey.getState(state)
@@ -85,58 +138,21 @@ export const ySyncPlugin = (yXmlFragment, { colors = defaultColors, colorMapping
     key: ySyncPluginKey,
     state: {
       init: (initargs, state) => {
-        return {
-          type: yXmlFragment,
-          doc: yXmlFragment.doc,
-          binding: null,
-          snapshot: null,
-          prevSnapshot: null,
-          isChangeOrigin: false,
-          colors,
-          colorMapping,
-          permanentUserData
-        }
+        return pluginState
       },
       apply: (tr, pluginState) => {
-        const change = tr.getMeta(ySyncPluginKey)
-        if (change !== undefined) {
-          pluginState = Object.assign({}, pluginState)
-          for (const key in change) {
-            pluginState[key] = change[key]
-          }
-        }
-        // always set isChangeOrigin. If undefined, this is not change origin.
-        pluginState.isChangeOrigin = change !== undefined && !!change.isChangeOrigin
-        if (pluginState.binding !== null) {
-          if (change !== undefined && (change.snapshot != null || change.prevSnapshot != null)) {
-            // snapshot changed, rerender next
-            setTimeout(() => {
-              if (change.restore == null) {
-                pluginState.binding._renderSnapshot(change.snapshot, change.prevSnapshot, pluginState)
-              } else {
-                pluginState.binding._renderSnapshot(change.snapshot, change.snapshot, pluginState)
-                // reset to current prosemirror state
-                delete pluginState.restore
-                delete pluginState.snapshot
-                delete pluginState.prevSnapshot
-                pluginState.binding._prosemirrorChanged(pluginState.binding.prosemirrorView.state.doc)
-              }
-            }, 0)
-          }
-        }
-        return pluginState
+        return pluginState.apply(tr, pluginState)
       }
     },
     view: view => {
-      const binding = new ProsemirrorBinding(yXmlFragment, view)
+      const { binding } = pluginState.init(view)
       // Make sure this is called in a separate context
       setTimeout(() => {
         binding._forceRerender()
-        view.dispatch(view.state.tr.setMeta(ySyncPluginKey, { binding }))
+        view.dispatch(view.state.tr.setMeta(ySyncPluginKey, { forceUpdate: true }))
       }, 0)
       return {
         update: () => {
-          const pluginState = plugin.getState(view.state)
           if (pluginState.snapshot == null && pluginState.prevSnapshot == null) {
             if (changedInitialContent || view.state.doc.content.findDiffStart(view.state.doc.type.createAndFill().content) !== null) {
               changedInitialContent = true
@@ -145,12 +161,11 @@ export const ySyncPlugin = (yXmlFragment, { colors = defaultColors, colorMapping
           }
         },
         destroy: () => {
-          binding.destroy()
+          pluginState.destroy()
         }
       }
     }
   })
-  return plugin
 }
 
 /**
